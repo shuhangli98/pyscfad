@@ -8,28 +8,6 @@ from pyscfad.lib import ops, logger
 from pyscfad import ao2mo
 
 
-def kernel(dsrg, s, mo_energy=None, mo_coeff=None, eris=None):
-    if eris is None:
-        eris = dsrg.ao2mo(mo_coeff)
-
-    if mo_energy is None:
-        mo_energy = eris.mo_energy
-
-    nocc = dsrg.nocc
-    nvir = dsrg.nmo - nocc
-    eia = mo_energy[:nocc, None] - mo_energy[None, nocc:]
-    edsrg = 0
-    for i in range(nocc):
-        gi = np.asarray(eris.ovov[i*nvir:(i+1)*nvir])
-        gi = gi.reshape(nvir, nocc, nvir).transpose(1, 0, 2)
-        delta = eia[:, :, None] + eia[i][None, None, :]
-        t2i = (1 - np.exp(-2*s*(delta**2))) * gi.conj()/delta
-        edsrg += np.einsum('jab,jab', t2i, gi) * 2
-        edsrg -= np.einsum('jab,jba', t2i, gi)
-
-    return edsrg.real
-
-
 class DSRG():
     def __init__(self, mf, frozen=None, s=0.5):
         self.flow_param = s
