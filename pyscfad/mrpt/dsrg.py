@@ -18,7 +18,6 @@ def kernel(dsrg, s, mo_energy=None, mo_coeff=None, eris=None):
     nocc = dsrg.nocc
     nvir = dsrg.nmo - nocc
     eia = mo_energy[:nocc, None] - mo_energy[None, nocc:]
-    t2 = np.empty((nocc, nocc, nvir, nvir), dtype=eris.ovov.dtype)
     edsrg = 0
     for i in range(nocc):
         gi = np.asarray(eris.ovov[i*nvir:(i+1)*nvir])
@@ -29,15 +28,6 @@ def kernel(dsrg, s, mo_energy=None, mo_coeff=None, eris=None):
         edsrg -= np.einsum('jab,jba', t2i, gi)
 
     return edsrg.real
-
-
-def get_e_hf(dsrg, mo_coeff=None):
-    # Get HF energy, which is needed for total MP2 energy.
-    if mo_coeff is None:
-        mo_coeff = dsrg.mo_coeff
-    dm = dsrg._scf.make_rdm1(mo_coeff, dsrg.mo_occ)
-    vhf = dsrg._scf.get_veff(dsrg._scf.mol, dm)
-    return dsrg._scf.energy_tot(dm=dm, vhf=vhf)
 
 
 class DSRG():
@@ -55,12 +45,13 @@ class DSRG():
         self.nocc = np.count_nonzero(self.mo_occ > 0)
         self.nmo = len(self.mo_energy)
         self.e_hf = 0.0
-        self.corre = 0.0
+        self.corr = 0.0
+        self.e_tot = 0.0
 
     def _finalize(self):
         '''Hook for dumping results and clearing up the object.'''
         logger.note(self, 'E(%s) = %.15g  E_corr = %.15g',
-                    self.__class__.__name__, self.e_tot(), self.e_corr)
+                    self.__class__.__name__, self.e_tot, self.e_corr)
         return self
 
     def ao2mo(self, mo_coeff=None):
@@ -74,24 +65,38 @@ class DSRG():
         eris.ovov = ao2mo.general(self._scf._eri, (co, cv, co, cv))
         return eris
 
-    def kernel(self, mo_energy=None, mo_coeff=None, eris=None):
-        self.e_hf = self.get_e_hf(mo_coeff=mo_coeff)
+    def kernel(self, s=0.5, mo_energy=None, mo_coeff=None, eris=None):
+        self.e_hf = self.get_e_hf()
         if eris is None:
             eris = self.ao2mo(mo_coeff)
-        if self._scf.converged:
-            self.e_corr = self.init_amps(
-                self.flow_param, mo_energy, mo_coeff, eris)
 
+        if mo_energy is None:
+            mo_energy = eris.mo_energy
+
+        if self._scf.converged:
+            nocc = self.nocc
+            nvir = self.nmo - nocc
+            eia = mo_energy[:nocc, None] - mo_energy[None, nocc:]
+            edsrg = 0
+            for i in range(nocc):
+                gi = np.asarray(eris.ovov[i*nvir:(i+1)*nvir])
+                gi = gi.reshape(nvir, nocc, nvir).transpose(1, 0, 2)
+                delta = eia[:, :, None] + eia[i][None, None, :]
+                t2i = (1 - np.exp(-2*s*(delta**2))) * gi.conj()/delta
+                edsrg += np.einsum('jab,jab', t2i, gi) * 2
+                edsrg -= np.einsum('jab,jba', t2i, gi)
+
+        self.e_corr = edsrg.real
         self._finalize()
+        self.e_tot = self.e_corr + self.e_hf
+
         return self.e_corr
 
-    get_e_hf = get_e_hf
-
-    def e_tot(self):
-        return self.e_hf + self.e_corr
-
-    def init_amps(self, s=0.5, mo_energy=None, mo_coeff=None, eris=None):
-        return kernel(self, s, mo_energy, mo_coeff, eris)
+    def get_e_hf(self):
+        # Get HF energy.
+        dm = self._scf.make_rdm1(self.mo_coeff, self.mo_occ)
+        vhf = self._scf.get_veff(self._scf.mol, dm)
+        return self._scf.energy_tot(dm=dm, vhf=vhf)
 
 
 class _ChemistsERIs():
@@ -129,7 +134,7 @@ if __name__ == '__main__':
         mf.kernel(dm0)
         dsrg = DSRG(mf)
         dsrg.kernel()
-        return dsrg.e_tot()
+        return dsrg.e_tot
     jac = jax.grad(run_dsrg)(mol)
     print(f'Nuclaer gradient:\n{jac.coords}')
     print(f'Gradient wrt basis exponents:\n{jac.exp}')
