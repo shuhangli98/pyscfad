@@ -23,9 +23,6 @@ class DSRG():
         self.mo_energy = mf.mo_energy
         self.nocc = np.count_nonzero(self.mo_occ > 0)
         self.nmo = len(self.mo_energy)
-        self.e_hf = 0.0
-        self.corr = 0.0
-        self.e_tot = 0.0
 
     def _finalize(self):
         '''Hook for dumping results and clearing up the object.'''
@@ -112,7 +109,7 @@ if __name__ == '__main__':
     def run_dsrg(mol, dm0=None):
         mf = scf.RHF(mol)
         mf.kernel(dm0)
-        dsrg = DSRG(mf, s=10000000000)
+        dsrg = DSRG(mf, s=1.0)
         dsrg.kernel()
         return dsrg.e_tot
     jac = jax.grad(run_dsrg)(mol)
