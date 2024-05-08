@@ -8,6 +8,7 @@ from pyscfad.lib import ops, logger
 from pyscfad import ao2mo
 
 
+@util.pytree_node(['_scf', 'mol'], num_args=1)
 class DSRG():
     def __init__(self, mf, frozen=None, s=0.5):
         self.flow_param = s
@@ -43,7 +44,7 @@ class DSRG():
         eris.ovov = ao2mo.general(self._scf._eri, (co, cv, co, cv))
         return eris
 
-    def kernel(self, s=0.5, mo_energy=None, mo_coeff=None, eris=None):
+    def kernel(self, mo_energy=None, mo_coeff=None, eris=None):
         self.e_hf = self.get_e_hf()
         if eris is None:
             eris = self.ao2mo(mo_coeff)
@@ -60,13 +61,14 @@ class DSRG():
                 gi = np.asarray(eris.ovov[i*nvir:(i+1)*nvir])
                 gi = gi.reshape(nvir, nocc, nvir).transpose(1, 0, 2)
                 delta = eia[:, :, None] + eia[i][None, None, :]
-                t2i = (1 - np.exp(-2*s*(delta**2))) * gi.conj()/delta
+                t2i = (1 - np.exp(-2*self.flow_param*(delta**2))) * \
+                    gi.conj()/delta
                 edsrg += np.einsum('jab,jab', t2i, gi) * 2
                 edsrg -= np.einsum('jab,jba', t2i, gi)
 
         self.e_corr = edsrg.real
-        self._finalize()
         self.e_tot = self.e_corr + self.e_hf
+        self._finalize()
 
         return self.e_corr
 
@@ -98,8 +100,8 @@ if __name__ == '__main__':
     from pyscfad import gto, scf, mp
     from pyscfad import config
 
-    # # implicit differentiation of SCF iterations
-    # config.update('pyscfad_scf_implicit_diff', True)
+    # implicit differentiation of SCF iterations
+    config.update('pyscfad_scf_implicit_diff', True)
 
     mol = gto.Mole()
     mol.atom = 'H 0 0 0; H 0 0 0.74'
@@ -110,7 +112,7 @@ if __name__ == '__main__':
     def run_dsrg(mol, dm0=None):
         mf = scf.RHF(mol)
         mf.kernel(dm0)
-        dsrg = DSRG(mf)
+        dsrg = DSRG(mf, s=10000000000)
         dsrg.kernel()
         return dsrg.e_tot
     jac = jax.grad(run_dsrg)(mol)
